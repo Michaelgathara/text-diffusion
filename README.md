@@ -1,1 +1,2 @@
-# text-diffusion
+# Text Diffusion
+Text Generation Model using Diffusion
