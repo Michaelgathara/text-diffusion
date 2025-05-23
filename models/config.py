@@ -11,6 +11,9 @@ class ModelConfig:
 
         self.diffusion_timesteps = 1000
         self.noise_schedule_type = 'cosine' # ('linear', 'cosine', 'sqrt_linear', etc.)
+        
+        self.beta_start = 0.0001
+        self.beta_end = 0.02
 
         self.batch_size = 32
         self.accumulation_steps = 8
