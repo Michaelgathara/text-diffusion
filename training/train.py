@@ -247,7 +247,7 @@ def main(args):
 
         if (iter_num + 1) % args.save_interval == 0:
             logger.info(f"saving checkpoint at iteration {iter_num+1}...")
-            checkpoint_path = os.path.join(config.checkpo int_dir, f"checkpoint_iter_{iter_num+1}.pt")
+            checkpoint_path = os.path.join(config.checkpoint_dir, f"checkpoint_iter_{iter_num+1}.pt")
             os.makedirs(config.checkpoint_dir, exist_ok=True)
             torch.save({
                 'iter_num': iter_num + 1,
