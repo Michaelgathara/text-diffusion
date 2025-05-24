@@ -1,11 +1,8 @@
-# training/train.py
-
 import torch
 import torch.nn.functional as F
 import os
 import sys
 import logging
-import time
 import argparse
 import numpy as np 
 
@@ -27,8 +24,6 @@ def get_dataloaders(config, tokenizer, args): # renamed to get_dataloaders
     dataset_subset = args.dataset_subset
 
     try:
-        # for validation, we'll take a small, fixed part of the stream
-        # for the training stream, we'll skip these validation samples
         # an alternative is to use a different split if available, or a different small dataset
         full_stream_raw = load_dataset(dataset_name, name=dataset_subset, streaming=True)['train']
         
@@ -252,7 +247,7 @@ def main(args):
 
         if (iter_num + 1) % args.save_interval == 0:
             logger.info(f"saving checkpoint at iteration {iter_num+1}...")
-            checkpoint_path = os.path.join(config.checkpoint_dir, f"checkpoint_iter_{iter_num+1}.pt")
+            checkpoint_path = os.path.join(config.checkpo int_dir, f"checkpoint_iter_{iter_num+1}.pt")
             os.makedirs(config.checkpoint_dir, exist_ok=True)
             torch.save({
                 'iter_num': iter_num + 1,
@@ -270,7 +265,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="train a text diffusion model with fineweb-edu.")
     parser.add_argument("--dataset_subset", type=str, default="sample-10BT", help="fineweb-edu subset (e.g., 'sample-10BT', 'default')")
     parser.add_argument("--num_validation_samples", type=int, default=1000, help="number of samples from the beginning of the stream to use for validation.")
-    parser.add_argument("--map_batch_size", type=int, default=1000, help="batch size for the .map() tokenization function.") # new arg
+    parser.add_argument("--map_batch_size", type=int, default=1000, help="batch size for the .map() tokenization function.") 
     parser.add_argument("--tokenizer_name", type=str, default="gpt2", help="name or path of the hugging face tokenizer.")
     parser.add_argument("--block_size", type=int, default=None, help="sequence length. overrides modelconfig if set.")
     parser.add_argument("--shuffle_buffer_size", type=int, default=10000, help="buffer size for shuffling dataset.")
