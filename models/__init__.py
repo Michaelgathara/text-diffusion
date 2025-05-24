@@ -1,3 +1,3 @@
 from .config import ModelConfig
-
-__all__ = ['ModelConfig']
+from .core import DiffusionTransformerModel, DiffusionProcess
+__all__ = ['ModelConfig', 'DiffusionTransformerModel', 'DiffusionProcess']
