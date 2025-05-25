@@ -5,7 +5,7 @@ class ModelConfig:
         self.n_embd = 2048       # Embedding dimension 
         self.n_head = 32        # Number of attention heads 
         self.n_layer = 32      # Number of transformer layers 
-        self.block_size = 768   # Max sequence length / context window (e.g., 128, 256, 512)
+        self.block_size = 1024   # Max sequence length / context window (e.g., 128, 256, 512)
         self.dropout = 0.1      # Dropout rate
         
         # mem stuff
