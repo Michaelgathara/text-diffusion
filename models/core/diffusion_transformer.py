@@ -82,43 +82,52 @@ class MultiHeadAttention(nn.Module):
         self.use_flash = HAS_FLASH_ATTN and self.config.use_flash_attention
 
     def forward(self, x):
-        B, T, C = x.shape 
+        B, T, C = x.shape # batch size, sequence length, embedding dimensionality (n_embd)
 
-        qkv = self.qkv_proj(x) # (B, T, 3 * C)
-        q, k, v = qkv.chunk(3, dim=-1) # (B, T, C), (B, T, C), (B, T, C)
+        qkv = self.qkv_proj(x)
+        q, k, v = qkv.chunk(3, dim=-1)
 
         q = q.view(B, T, self.n_head, self.head_size).transpose(1, 2) # (B, n_head, T, head_size)
         k = k.view(B, T, self.n_head, self.head_size).transpose(1, 2) # (B, n_head, T, head_size)
         v = v.view(B, T, self.n_head, self.head_size).transpose(1, 2) # (B, n_head, T, head_size)
         
         if self.use_flash:
-            # our q,k,v are (B, n_head, T, head_size), so transpose n_head and T
-            q_flash = q.transpose(1, 2) # (B, T, n_head, head_size)
-            k_flash = k.transpose(1, 2) # (B, T, n_head, head_size)
-            v_flash = v.transpose(1, 2) # (B, T, n_head, head_size)
+            q_flash = q.transpose(1, 2) 
+            k_flash = k.transpose(1, 2) 
+            v_flash = v.transpose(1, 2)
             
-            # if you need a causal mask (e.g. for ar generation), set causal=true
-            # dropout_p is applied inside flash_attn_func if training
-            attn_output = flash_attn_func(q_flash, k_flash, v_flash, dropout_p=self.config.dropout if self.training else 0.0, causal=False)
+            if x.dtype == torch.float32 and torch.is_autocast_enabled(): 
+                amp_dtype = torch.get_autocast_gpu_dtype() if torch.cuda.is_available() else torch.float16
+                if amp_dtype not in [torch.float16, torch.bfloat16]: 
+                    amp_dtype = torch.float16 
+                q_flash = q_flash.to(amp_dtype)
+                k_flash = k_flash.to(amp_dtype)
+                v_flash = v_flash.to(amp_dtype)
+            elif x.dtype == torch.float32:
+                q_flash = q_flash.to(torch.float16)
+                k_flash = k_flash.to(torch.float16)
+                v_flash = v_flash.to(torch.float16)
+
+
+            attn_output = flash_attn_func(
+                q_flash, k_flash, v_flash, 
+                dropout_p=self.config.dropout if self.training else 0.0, 
+                causal=False
+            )
             y = attn_output.reshape(B, T, C)
         
-        elif hasattr(F, 'scaled_dot_product_attention'): 
-            # q, k, v are (B, n_head, T, head_size)
-            # is_causal=false for bidirectional attention
+        elif hasattr(F, 'scaled_dot_product_attention'):
             y = F.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.config.dropout if self.training else 0.0, is_causal=False)
-            y = y.transpose(1, 2).contiguous().view(B, T, C) # (B, T, C)
+            y = y.transpose(1, 2).contiguous().view(B, T, C)
         
         else: 
-            # (B, n_head, T, head_size) @ (B, n_head, head_size, T) -> (B, n_head, T, T)
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
             att = F.softmax(att, dim=-1)
             att = self.dropout(att)
-            # (B, n_head, T, T) @ (B, n_head, T, head_size) -> (B, n_head, T, head_size)
             y = att @ v 
-            y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
+            y = y.transpose(1, 2).contiguous().view(B, T, C)
 
         y = self.out_proj(y)
-        # y = self.dropout(y) # dropout is applied in out_proj's nn.dropout or after softmax in att
         return y
 
 class FeedForward(nn.Module):
