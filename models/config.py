@@ -1,12 +1,11 @@
 # In models/config.py
 class ModelConfig:
     def __init__(self):
-        # --- Model Architecture Parameters ---
         self.vocab_size = 50257  # Example: GPT-2 vocab size, adjust as needed
-        self.n_embd = 2048       # Embedding dimension (e.g., 512, 768)
-        self.n_head = 32        # Number of attention heads (e.g., 8, 12)
-        self.n_layer = 32      # Number of transformer layers (e.g., 6, 12)
-        self.block_size = 512   # Max sequence length / context window (e.g., 128, 256, 512)
+        self.n_embd = 2560       # Embedding dimension (increased from 2048)
+        self.n_head = 32        # Number of attention heads (kept same)
+        self.n_layer = 40      # Number of transformer layers (increased from 32)
+        self.block_size = 1024   # Max sequence length / context window (e.g., 128, 256, 512)
         self.dropout = 0.1      # Dropout rate
         
         # mem stuff
