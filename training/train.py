@@ -202,7 +202,7 @@ def main(args):
                 x_start=x_start_embeddings, t=t, noise=noise_eps
             )
 
-            with torch.cuda.amp.autocast(enabled=(device.type == 'cuda' and args.use_amp)):
+            with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16 if device.type == 'cuda' and torch.cuda.is_bf16_supported() else torch.float16, enabled=(device.type == 'cuda' and args.use_amp)):
                 predicted_noise, loss = model(
                     noised_token_ids_or_embeddings=x_t_noised_embeddings,
                     timesteps=t,

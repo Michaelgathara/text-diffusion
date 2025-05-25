@@ -96,27 +96,30 @@ class MultiHeadAttention(nn.Module):
             k_flash = k.transpose(1, 2) 
             v_flash = v.transpose(1, 2)
             
-            if x.dtype == torch.float32 and torch.is_autocast_enabled(): 
-                amp_dtype = torch.get_autocast_gpu_dtype() if torch.cuda.is_available() else torch.float16
-                if amp_dtype not in [torch.float16, torch.bfloat16]: 
-                    amp_dtype = torch.float16 
-                q_flash = q_flash.to(amp_dtype)
-                k_flash = k_flash.to(amp_dtype)
-                v_flash = v_flash.to(amp_dtype)
-            elif x.dtype == torch.float32:
-                q_flash = q_flash.to(torch.float16)
-                k_flash = k_flash.to(torch.float16)
-                v_flash = v_flash.to(torch.float16)
+            expected_flash_dtype = torch.get_autocast_gpu_dtype() if torch.is_autocast_enabled() else torch.float16
+            if expected_flash_dtype not in [torch.float16, torch.bfloat16]: # safety default
+                expected_flash_dtype = torch.float16
+
+            if q_flash.dtype not in [torch.float16, torch.bfloat16]:
+                q_flash = q_flash.to(expected_flash_dtype)
+                k_flash = k_flash.to(expected_flash_dtype)
+                v_flash = v_flash.to(expected_flash_dtype)
+            elif q_flash.dtype != expected_flash_dtype and torch.is_autocast_enabled():
+                q_flash = q_flash.to(expected_flash_dtype)
+                k_flash = k_flash.to(expected_flash_dtype)
+                v_flash = v_flash.to(expected_flash_dtype)
 
 
             attn_output = flash_attn_func(
                 q_flash, k_flash, v_flash, 
                 dropout_p=self.config.dropout if self.training else 0.0, 
                 causal=False
-            )
+            ) # output is expected_flash_dtype
             y = attn_output.reshape(B, T, C)
         
         elif hasattr(F, 'scaled_dot_product_attention'):
+            # q, k, v are (b, n_head, t, head_size)
+            # scaled_dot_product_attention handles dtypes internally based on autocast context
             y = F.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.config.dropout if self.training else 0.0, is_causal=False)
             y = y.transpose(1, 2).contiguous().view(B, T, C)
         
@@ -126,6 +129,11 @@ class MultiHeadAttention(nn.Module):
             att = self.dropout(att)
             y = att @ v 
             y = y.transpose(1, 2).contiguous().view(B, T, C)
+
+        if torch.is_autocast_enabled() and y.dtype != self.out_proj.weight.dtype:
+             if y.dtype == torch.half or y.dtype == torch.bfloat16:
+                 if self.out_proj.weight.dtype == torch.float32:
+                     y = y.to(torch.float32)
 
         y = self.out_proj(y)
         return y
