@@ -3,6 +3,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 
+try:
+    from flash_attn import flash_attn_func
+    HAS_FLASH_ATTN = True
+    print("flash attention is available.")
+except ImportError:
+    HAS_FLASH_ATTN = False
+    print("flash attention is not available. using standard attention.")
+
 class TimestepEmbedding(nn.Module):
     """
     integer timesteps into vector embeddings using sinusoidal embeddings
@@ -20,13 +28,13 @@ class TimestepEmbedding(nn.Module):
         
         self.mlp = nn.Sequential(
             nn.Linear(embed_dim, embed_dim * 4),
-            nn.GELU(), 
+            nn.Mish(), # or silu/gelu
             nn.Linear(embed_dim * 4, embed_dim)
         )
 
     def forward(self, timesteps):
-        args = timesteps[:, None].float() * self.freqs[None, :] 
-        embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
+        args = timesteps[:, None].float() * self.freqs[None, :] # (batch_size, half)
+        embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1) 
         if self.embed_dim % 2 != 0: 
             embedding = torch.cat([embedding, torch.zeros_like(embedding[:, :1])], dim=-1)
         return self.mlp(embedding) 
@@ -63,15 +71,55 @@ class MultiHeadAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
         assert config.n_embd % config.n_head == 0
-        head_size = config.n_embd // config.n_head
-        self.heads = nn.ModuleList([SelfAttention(config, head_size) for _ in range(config.n_head)])
-        self.proj = nn.Linear(config.n_embd, config.n_embd) # n_embd = n_head * head_size
+        self.config = config
+        self.n_head = config.n_head
+        self.head_size = config.n_embd // config.n_head
+        
+        self.qkv_proj = nn.Linear(config.n_embd, 3 * config.n_embd) 
+        self.out_proj = nn.Linear(config.n_embd, config.n_embd)
         self.dropout = nn.Dropout(config.dropout)
 
+        self.use_flash = HAS_FLASH_ATTN and self.config.use_flash_attention
+
     def forward(self, x):
-        out = torch.cat([h(x) for h in self.heads], dim=-1)
-        out = self.dropout(self.proj(out))
-        return out
+        B, T, C = x.shape 
+
+        qkv = self.qkv_proj(x) # (B, T, 3 * C)
+        q, k, v = qkv.chunk(3, dim=-1) # (B, T, C), (B, T, C), (B, T, C)
+
+        q = q.view(B, T, self.n_head, self.head_size).transpose(1, 2) # (B, n_head, T, head_size)
+        k = k.view(B, T, self.n_head, self.head_size).transpose(1, 2) # (B, n_head, T, head_size)
+        v = v.view(B, T, self.n_head, self.head_size).transpose(1, 2) # (B, n_head, T, head_size)
+        
+        if self.use_flash:
+            # our q,k,v are (B, n_head, T, head_size), so transpose n_head and T
+            q_flash = q.transpose(1, 2) # (B, T, n_head, head_size)
+            k_flash = k.transpose(1, 2) # (B, T, n_head, head_size)
+            v_flash = v.transpose(1, 2) # (B, T, n_head, head_size)
+            
+            # if you need a causal mask (e.g. for ar generation), set causal=true
+            # dropout_p is applied inside flash_attn_func if training
+            attn_output = flash_attn_func(q_flash, k_flash, v_flash, dropout_p=self.config.dropout if self.training else 0.0, causal=False)
+            y = attn_output.reshape(B, T, C)
+        
+        elif hasattr(F, 'scaled_dot_product_attention'): 
+            # q, k, v are (B, n_head, T, head_size)
+            # is_causal=false for bidirectional attention
+            y = F.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.config.dropout if self.training else 0.0, is_causal=False)
+            y = y.transpose(1, 2).contiguous().view(B, T, C) # (B, T, C)
+        
+        else: 
+            # (B, n_head, T, head_size) @ (B, n_head, head_size, T) -> (B, n_head, T, T)
+            att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+            att = F.softmax(att, dim=-1)
+            att = self.dropout(att)
+            # (B, n_head, T, T) @ (B, n_head, T, head_size) -> (B, n_head, T, head_size)
+            y = att @ v 
+            y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
+
+        y = self.out_proj(y)
+        # y = self.dropout(y) # dropout is applied in out_proj's nn.dropout or after softmax in att
+        return y
 
 class FeedForward(nn.Module):
     def __init__(self, config):

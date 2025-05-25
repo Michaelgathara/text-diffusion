@@ -8,9 +8,11 @@ class ModelConfig:
         self.n_layer = 32      # Number of transformer layers (e.g., 6, 12)
         self.block_size = 1024   # Max sequence length / context window (e.g., 128, 256, 512)
         self.dropout = 0.1      # Dropout rate
+        self.use_flash_attention = True
 
         self.diffusion_timesteps = 1000
         self.noise_schedule_type = 'cosine' # ('linear', 'cosine', 'sqrt_linear', etc.)
+        self.cosine_schedule_s = 0.008
         
         self.beta_start = 0.0001
         self.beta_end = 0.02
