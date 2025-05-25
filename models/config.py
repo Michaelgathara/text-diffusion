@@ -4,8 +4,8 @@ class ModelConfig:
         # --- Model Architecture Parameters ---
         self.vocab_size = 50257  # Example: GPT-2 vocab size, adjust as needed
         self.n_embd = 4096       # Embedding dimension (e.g., 512, 768)
-        self.n_head = 48        # Number of attention heads (e.g., 8, 12)
-        self.n_layer = 32       # Number of transformer layers (e.g., 6, 12)
+        self.n_head = 32        # Number of attention heads (e.g., 8, 12)
+        self.n_layer = 48      # Number of transformer layers (e.g., 6, 12)
         self.block_size = 1024   # Max sequence length / context window (e.g., 128, 256, 512)
         self.dropout = 0.1      # Dropout rate
 
