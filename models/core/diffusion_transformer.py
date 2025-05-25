@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.utils.checkpoint as checkpoint
 import math
 
 try:
@@ -153,40 +154,31 @@ class FeedForward(nn.Module):
 class TransformerBlock(nn.Module):
     def __init__(self, config):
         super().__init__()
+        self.config = config
         self.ln1 = nn.LayerNorm(config.n_embd)
         self.attn = MultiHeadAttention(config)
         self.ln2 = nn.LayerNorm(config.n_embd)
         self.ffwd = FeedForward(config)
 
-        # for AdaLN (Adaptive Layer Normalization) or FiLM (Feature-wise Linear Modulation)
-        # this is where you'd project timestep_embedding to get scale/shift parameters
-        # for simplicity, we'll start without it, but it's a common improvement.
-        # example: self.ada_ln_scale_shift = nn.Linear(config.n_embd_timestep, 2 * config.n_embd)
-
     def forward(self, x, timestep_embedding=None):
-        # x: (B, T, C)
-        # timestep_embedding: (B, C_ts) - if used for AdaLN/FiLM
-
-        # if using AdaLN:
-        # scale_shift = self.ada_ln_scale_shift(timestep_embedding).unsqueeze(1) # (B, 1, 2*C)
-        # scale, shift = scale_shift.chunk(2, dim=-1) # (B, 1, C), (B, 1, C)
-        # x_norm = self.ln1(x) * (1 + scale) + shift
-        # x = x + self.attn(x_norm)
-        
-        # standard Pre-Norm structure:
-        x = x + self.attn(self.ln1(x))
-        x = x + self.ffwd(self.ln2(x))
+        # Use gradient checkpointing if enabled
+        if getattr(self.config, 'use_gradient_checkpointing', False) and self.training:
+            x = x + checkpoint.checkpoint(self.attn, self.ln1(x), use_reentrant=False)
+            x = x + checkpoint.checkpoint(self.ffwd, self.ln2(x), use_reentrant=False)
+        else:
+            x = x + self.attn(self.ln1(x))
+            x = x + self.ffwd(self.ln2(x))
         return x
 
 class DiffusionTransformerModel(nn.Module):
-    def __init__(self, config): # config is an instance of ModelConfig
+    def __init__(self, config):
         super().__init__()
         self.config = config
 
         self.token_embedding = nn.Embedding(config.vocab_size, config.n_embd)
         self.position_embedding = nn.Embedding(config.block_size, config.n_embd)
         
-        self.timestep_embedding = TimestepEmbedding(config.n_embd) # timestep embedding dim matches n_embd
+        self.timestep_embedding = TimestepEmbedding(config.n_embd)
 
         self.blocks = nn.ModuleList([TransformerBlock(config) for _ in range(config.n_layer)])
         
@@ -194,6 +186,10 @@ class DiffusionTransformerModel(nn.Module):
         self.output_projection = nn.Linear(config.n_embd, config.n_embd)
 
         self.apply(self._init_weights)
+        
+        # Enable gradient checkpointing if requested
+        if getattr(config, 'use_gradient_checkpointing', False):
+            print("Gradient checkpointing enabled - trading compute for memory")
 
         print(f"DiffusionTransformerModel initialized with {sum(p.numel() for p in self.parameters()):,} parameters.")
 
@@ -209,33 +205,26 @@ class DiffusionTransformerModel(nn.Module):
             torch.nn.init.ones_(module.weight)
 
     def forward(self, noised_token_ids_or_embeddings, timesteps, targets_noise=None, input_is_embeddings=False):
-        # noised_token_ids_or_embeddings: (batch_size, seq_len) if token_ids, or (B, T, C) if embeddings
-        # timesteps: (batch_size,) - integer timesteps
-        # targets_noise: (batch_size, seq_len, embed_dim) - the actual noise added (if model predicts noise)
-        # input_is_embeddings: bool, True if noised_token_ids_or_embeddings are already embeddings
-
         B, T = noised_token_ids_or_embeddings.shape[:2]
 
         if input_is_embeddings:
-            x = noised_token_ids_or_embeddings # input is already (B, T, C_emb)
+            x = noised_token_ids_or_embeddings
         else:
-            token_embed = self.token_embedding(noised_token_ids_or_embeddings) # (B, T, C_emb)
+            token_embed = self.token_embedding(noised_token_ids_or_embeddings)
             x = token_embed
 
-        pos_embed = self.position_embedding(torch.arange(T, device=x.device)) # (T, C_emb)
-        time_embed = self.timestep_embedding(timesteps) # (B, C_emb_ts)
+        pos_embed = self.position_embedding(torch.arange(T, device=x.device))
+        time_embed = self.timestep_embedding(timesteps)
 
-        x = x + pos_embed.unsqueeze(0) # (B, T, C_emb)
-        
+        x = x + pos_embed.unsqueeze(0)
         x = x + time_embed.unsqueeze(1)
 
+        # Apply transformer blocks with optional gradient checkpointing
         for block in self.blocks:
-            # if blocks are adapted for AdaLN, pass time_embed here:
-            # x = block(x, time_embed)
-            x = block(x) 
+            x = block(x)
 
         x = self.final_ln(x)
-        predicted_output = self.output_projection(x) # (B, T, C_emb), predicted noise
+        predicted_output = self.output_projection(x)
 
         loss = None
         if targets_noise is not None:
