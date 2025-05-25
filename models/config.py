@@ -2,7 +2,7 @@
 class ModelConfig:
     def __init__(self):
         self.vocab_size = 50257  # Example: GPT-2 vocab size, adjust as needed
-        self.n_embd = 2304       # Embedding dimension (reduced from 2560)
+        self.n_embd = 2048       # Embedding dimension 
         self.n_head = 32        # Number of attention heads 
         self.n_layer = 32      # Number of transformer layers 
         self.block_size = 768   # Max sequence length / context window (e.g., 128, 256, 512)
