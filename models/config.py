@@ -6,7 +6,7 @@ class ModelConfig:
         self.n_embd = 2048       # Embedding dimension (e.g., 512, 768)
         self.n_head = 32        # Number of attention heads (e.g., 8, 12)
         self.n_layer = 32      # Number of transformer layers (e.g., 6, 12)
-        self.block_size = 1024   # Max sequence length / context window (e.g., 128, 256, 512)
+        self.block_size = 512   # Max sequence length / context window (e.g., 128, 256, 512)
         self.dropout = 0.1      # Dropout rate
         self.use_flash_attention = True
 
