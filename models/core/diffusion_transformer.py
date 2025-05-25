@@ -79,7 +79,7 @@ class MultiHeadAttention(nn.Module):
         self.out_proj = nn.Linear(config.n_embd, config.n_embd)
         self.dropout = nn.Dropout(config.dropout)
 
-        self.use_flash = HAS_FLASH_ATTN and self.config.use_flash_attention
+        self.use_flash = HAS_FLASH_ATTN and getattr(config, 'use_flash_attention', True)
 
     def forward(self, x):
         B, T, C = x.shape # batch size, sequence length, embedding dimensionality (n_embd)
@@ -109,7 +109,6 @@ class MultiHeadAttention(nn.Module):
                 k_flash = k_flash.to(expected_flash_dtype)
                 v_flash = v_flash.to(expected_flash_dtype)
 
-
             attn_output = flash_attn_func(
                 q_flash, k_flash, v_flash, 
                 dropout_p=self.config.dropout if self.training else 0.0, 
@@ -130,10 +129,10 @@ class MultiHeadAttention(nn.Module):
             y = att @ v 
             y = y.transpose(1, 2).contiguous().view(B, T, C)
 
-        if torch.is_autocast_enabled() and y.dtype != self.out_proj.weight.dtype:
-             if y.dtype == torch.half or y.dtype == torch.bfloat16:
-                 if self.out_proj.weight.dtype == torch.float32:
-                     y = y.to(torch.float32)
+        # Ensure dtype compatibility with output projection
+        # Convert y to match the dtype of the output projection weights
+        if y.dtype != self.out_proj.weight.dtype:
+            y = y.to(self.out_proj.weight.dtype)
 
         y = self.out_proj(y)
         return y
