@@ -244,7 +244,6 @@ def train_conditional_step(model, diffusion_helper, batch_data, device, config, 
     batch_size = input_ids.shape[0]
     
     x_start_embeddings = model.token_embedding(input_ids)
-    
     t = torch.randint(0, config.diffusion_timesteps, (batch_size,), device=device).long()
     
     noise_eps = torch.randn_like(x_start_embeddings)
@@ -262,18 +261,18 @@ def train_conditional_step(model, diffusion_helper, batch_data, device, config, 
             timesteps=t,
             input_is_embeddings=True
         )
-    
-    completion_masks = ~prompt_masks  # Invert for completion positions
-    completion_mask_expanded = completion_masks.unsqueeze(-1).expand_as(predicted_noise)
-    
-    if completion_mask_expanded.any():
-        loss = F.mse_loss(
-            predicted_noise[completion_mask_expanded],
-            noise_eps[completion_mask_expanded]
-        )
-    else:
-        # Fallback to regular loss if no completion tokens (shouldn't happen)
-        loss = F.mse_loss(predicted_noise, noise_eps)
+        
+        completion_masks = ~prompt_masks  # Invert for completion positions
+        completion_mask_expanded = completion_masks.unsqueeze(-1).expand_as(predicted_noise)
+        
+        if completion_mask_expanded.any():
+            loss = F.mse_loss(
+                predicted_noise[completion_mask_expanded],
+                noise_eps[completion_mask_expanded]
+            )
+        else:
+            # Fallback to regular loss if no completion tokens (shouldn't happen)
+            loss = F.mse_loss(predicted_noise, noise_eps)
     
     return loss
 
