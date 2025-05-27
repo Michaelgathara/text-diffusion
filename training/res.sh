@@ -2,6 +2,6 @@
 
 while true; do
     clear
-    tail train.log
+    cat train.log
     sleep 1
 done

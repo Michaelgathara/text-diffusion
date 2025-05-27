@@ -490,13 +490,12 @@ def main_unconditional_training(args):
     logger.info("training finished.")
 
 def main_conditional_training(args):
-    """New conditional training function"""
     os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
     
     config = ModelConfig()
     device = torch.device("cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
     logger.info(f"Using device: {device}")
-    logger.info("🎯 Training CONDITIONAL diffusion model")
+    logger.info("Training CONDITIONAL diffusion model")
 
     clear_memory()
 
