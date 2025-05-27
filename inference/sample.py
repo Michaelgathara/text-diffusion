@@ -129,9 +129,9 @@ def main(args):
     logger.info(f"starting generation of {args.num_samples} samples...")
     logger.info(f"sequence length (block_size): {config.block_size}, embedding dim: {config.n_embd}")
     logger.info(f"total diffusion timesteps in model config: {config.diffusion_timesteps}")
-    if args.sampling_steps is not None and args.sampling_steps < config.diffusion_timesteps:
-        logger.warning(f"note: full ddpm sampling uses all configured timesteps ({config.diffusion_timesteps}).")
-        logger.warning("ddim or other accelerated samplers are needed for fewer steps (not implemented here).")
+    # if args.sampling_steps is not None and args.sampling_steps < config.diffusion_timesteps:
+    #     logger.warning(f"note: full ddpm sampling uses all configured timesteps ({config.diffusion_timesteps}).")
+    #     logger.warning("ddim or other accelerated samplers are needed for fewer steps (not implemented here).")
 
     generated_embeddings = p_sample_loop(model, output_shape, diffusion_helper, device, args)
     
@@ -146,7 +146,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="generate text using a trained diffusion model.")
     parser.add_argument("checkpoint_path", type=str, help="path to the model checkpoint (.pt file).")
     parser.add_argument("--num_samples", type=int, default=1, help="number of text samples to generate.")
-    # parser.add_argument("--sampling_steps", type=int, default=None, help="number of ddim steps (not fully implemented for ddim here, uses ddpm full steps).")
+    # parser.add_argument("--sampling_steps", type=int, default=50, help="number of ddim steps (not fully implemented for ddim here, uses ddpm full steps).")
     parser.add_argument("--cpu", action="store_true", help="force use cpu.")
     parser.add_argument("--seed", type=int, default=None, help="random seed for sampling.")
     

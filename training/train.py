@@ -330,7 +330,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="train a text diffusion model with fineweb-edu.")
     parser.add_argument("--dataset_subset", type=str, default="sample-10BT", help="fineweb-edu subset (e.g., 'sample-10BT', 'default')")
-    parser.add_argument("--num_validation_samples", type=int, default=1000, help="number of samples from the beginning of the stream to use for validation.")
+    parser.add_argument("--num_validation_samples", type=int, default=2000, help="number of samples from the beginning of the stream to use for validation.")
     parser.add_argument("--map_batch_size", type=int, default=1000, help="batch size for the .map() tokenization function.") 
     parser.add_argument("--tokenizer_name", type=str, default="gpt2", help="name or path of the hugging face tokenizer.")
     parser.add_argument("--block_size", type=int, default=None, help="sequence length. overrides modelconfig if set.")
