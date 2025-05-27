@@ -81,46 +81,134 @@ def p_sample(model, x_t, t_tensor, diffusion_helper: DiffusionProcess):
 
 @torch.no_grad()
 def ddim_sample(model, x_t, t_tensor, t_prev_tensor, diffusion_helper, eta=0.0):
-    """
-    eta=0.0: deterministic (DDIM), eta=1.0: stochastic (DDPM)
-    """
+    """eta=0.0: deterministic (DDIM), eta=1.0: stochastic (DDPM)"""
     predicted_noise, _ = model(
         noised_token_ids_or_embeddings=x_t,
         timesteps=t_tensor,
         input_is_embeddings=True
     )
     
-    # Extract values for current and previous timesteps
     alpha_t = extract_tensor_values(diffusion_helper.alphas_cumprod, t_tensor, x_t.shape)
     
-    # Handle the case where t_prev might be negative (final step)
     if t_prev_tensor.min() < 0:
         alpha_prev = torch.ones_like(alpha_t)
     else:
         alpha_prev = extract_tensor_values(diffusion_helper.alphas_cumprod, t_prev_tensor, x_t.shape)
     
-    # Predict x_0 from current noisy sample
     sqrt_alpha_t = torch.sqrt(alpha_t)
     sqrt_one_minus_alpha_t = torch.sqrt(1 - alpha_t)
     x_0_pred = (x_t - sqrt_one_minus_alpha_t * predicted_noise) / sqrt_alpha_t
     
-    # DDIM sampling formula
     sqrt_alpha_prev = torch.sqrt(alpha_prev)
     sqrt_one_minus_alpha_prev = torch.sqrt(1 - alpha_prev)
     
-    # Direction pointing towards x_t
     dir_xt = sqrt_one_minus_alpha_prev * predicted_noise
     
-    # Add noise if eta > 0 (stochastic sampling)
-    if eta > 0 and t_prev_tensor.min() >= 0:  # Don't add noise on final step
+    if eta > 0 and t_prev_tensor.min() >= 0:
         sigma = eta * torch.sqrt((1 - alpha_prev) / (1 - alpha_t)) * torch.sqrt(1 - alpha_t / alpha_prev)
         noise = torch.randn_like(x_t)
         x_prev = sqrt_alpha_prev * x_0_pred + dir_xt + sigma * noise
     else:
-        # Deterministic sampling (pure DDIM)
         x_prev = sqrt_alpha_prev * x_0_pred + dir_xt
     
     return x_prev
+
+@torch.no_grad()
+def ddim_sample_with_prompt(model, x_t, t_tensor, t_prev_tensor, diffusion_helper, prompt_mask, prompt_embeddings, eta=0.0):
+    """DDIM sampling step with prompt conditioning"""
+    predicted_noise, _ = model(
+        noised_token_ids_or_embeddings=x_t,
+        timesteps=t_tensor,
+        input_is_embeddings=True
+    )
+    
+    alpha_t = extract_tensor_values(diffusion_helper.alphas_cumprod, t_tensor, x_t.shape)
+    
+    if t_prev_tensor.min() < 0:
+        alpha_prev = torch.ones_like(alpha_t)
+    else:
+        alpha_prev = extract_tensor_values(diffusion_helper.alphas_cumprod, t_prev_tensor, x_t.shape)
+    
+    sqrt_alpha_t = torch.sqrt(alpha_t)
+    sqrt_one_minus_alpha_t = torch.sqrt(1 - alpha_t)
+    x_0_pred = (x_t - sqrt_one_minus_alpha_t * predicted_noise) / sqrt_alpha_t
+    
+    sqrt_alpha_prev = torch.sqrt(alpha_prev)
+    sqrt_one_minus_alpha_prev = torch.sqrt(1 - alpha_prev)
+    
+    dir_xt = sqrt_one_minus_alpha_prev * predicted_noise
+    
+    if eta > 0 and t_prev_tensor.min() >= 0:
+        sigma = eta * torch.sqrt((1 - alpha_prev) / (1 - alpha_t)) * torch.sqrt(1 - alpha_t / alpha_prev)
+        noise = torch.randn_like(x_t)
+        x_prev = sqrt_alpha_prev * x_0_pred + dir_xt + sigma * noise
+    else:
+        x_prev = sqrt_alpha_prev * x_0_pred + dir_xt
+    
+    # Keep prompt positions fixed
+    x_prev = torch.where(prompt_mask.unsqueeze(-1), prompt_embeddings, x_prev)
+    
+    return x_prev
+
+@torch.no_grad()
+def ddim_sample_loop_with_prompt(model, tokenizer, prompt_text, max_new_tokens, diffusion_helper, device, num_steps=50, eta=0.0):
+    """DDIM sampling loop with prompt conditioning"""
+    # Tokenize the prompt
+    prompt_tokens = tokenizer.encode(prompt_text, return_tensors="pt").to(device)
+    prompt_length = prompt_tokens.shape[1]
+    
+    if prompt_length >= model.config.block_size:
+        raise ValueError(f"Prompt too long: {prompt_length} >= {model.config.block_size}")
+    
+    # Calculate total sequence length
+    total_length = min(prompt_length + max_new_tokens, model.config.block_size)
+    batch_size = 1
+    
+    # Get prompt embeddings (these stay fixed)
+    prompt_embeddings = model.token_embedding(prompt_tokens)
+    
+    # Create mask for prompt vs generated tokens
+    prompt_mask = torch.zeros(batch_size, total_length, dtype=torch.bool, device=device)
+    prompt_mask[:, :prompt_length] = True
+    
+    # Initialize with noise for generated part, prompt embeddings for prompt part
+    x_t = torch.randn(batch_size, total_length, model.config.n_embd, device=device)
+    x_t[:, :prompt_length] = prompt_embeddings
+    
+    # Pad prompt embeddings to full sequence length for masking
+    full_prompt_embeddings = torch.zeros(batch_size, total_length, model.config.n_embd, device=device)
+    full_prompt_embeddings[:, :prompt_length] = prompt_embeddings
+    
+    total_timesteps = diffusion_helper.num_timesteps
+    
+    if num_steps >= total_timesteps:
+        num_steps = total_timesteps
+    
+    # Create timestep schedule
+    step_size = total_timesteps // num_steps
+    timesteps = list(range(total_timesteps - 1, -1, -step_size))
+    
+    if timesteps[-1] != 0:
+        timesteps.append(0)
+    
+    timesteps = torch.tensor(timesteps, device=device)
+    
+    logger.info(f"DDIM sampling with prompt: '{prompt_text[:50]}{'...' if len(prompt_text) > 50 else ''}'")
+    logger.info(f"Prompt length: {prompt_length}, generating {total_length - prompt_length} new tokens")
+    
+    for i in tqdm(range(len(timesteps) - 1), desc=f"DDIM sampling ({len(timesteps)-1} steps)"):
+        t_curr = timesteps[i]
+        t_prev = timesteps[i + 1] if i + 1 < len(timesteps) else -1
+        
+        t_curr_tensor = torch.full((batch_size,), t_curr, device=device, dtype=torch.long)
+        t_prev_tensor = torch.full((batch_size,), t_prev, device=device, dtype=torch.long)
+        
+        x_t = ddim_sample_with_prompt(
+            model, x_t, t_curr_tensor, t_prev_tensor, diffusion_helper, 
+            prompt_mask, full_prompt_embeddings, eta
+        )
+    
+    return x_t
 
 @torch.no_grad()
 def p_sample_loop(model, shape, diffusion_helper: DiffusionProcess, device, args):
@@ -136,24 +224,19 @@ def p_sample_loop(model, shape, diffusion_helper: DiffusionProcess, device, args
 
 @torch.no_grad()
 def ddim_sample_loop(model, shape, diffusion_helper, device, num_steps=50, eta=0.0):
-    """
-    DDIM sampling loop with configurable number of steps
-    """
+    """DDIM sampling loop with configurable number of steps"""
     batch_size = shape[0]
     x_t = torch.randn(shape, device=device)
     
-    # Create timestep schedule (skip steps for acceleration)
     total_timesteps = diffusion_helper.num_timesteps
     
     if num_steps >= total_timesteps:
         logger.warning(f"Requested {num_steps} steps >= total timesteps {total_timesteps}. Using full DDPM sampling.")
         return p_sample_loop(model, shape, diffusion_helper, device, args=None)
     
-    # Create evenly spaced timesteps
     step_size = total_timesteps // num_steps
     timesteps = list(range(total_timesteps - 1, -1, -step_size))
     
-    # Ensure we end at timestep 0
     if timesteps[-1] != 0:
         timesteps.append(0)
     
@@ -198,38 +281,70 @@ def main(args):
         if device.type == 'cuda':
             torch.cuda.manual_seed_all(args.seed)
 
-    output_shape = (args.num_samples, config.block_size, config.n_embd)
-
-    logger.info(f"starting generation of {args.num_samples} samples...")
-    logger.info(f"sequence length (block_size): {config.block_size}, embedding dim: {config.n_embd}")
-    logger.info(f"total diffusion timesteps in model config: {config.diffusion_timesteps}")
-    
-    if args.sampling_steps is not None and args.sampling_steps < config.diffusion_timesteps:
-        logger.info(f"using DDIM sampling with {args.sampling_steps} steps (eta={args.eta})")
-        generated_embeddings = ddim_sample_loop(
-            model, output_shape, diffusion_helper, device, 
-            num_steps=args.sampling_steps, eta=args.eta
+    if args.prompt:
+        logger.info(f"generating with prompt: '{args.prompt}'")
+        
+        max_new_tokens = args.max_new_tokens or (config.block_size // 2)
+        sampling_steps = args.sampling_steps or 50
+        
+        generated_embeddings = ddim_sample_loop_with_prompt(
+            model, tokenizer, args.prompt, max_new_tokens, 
+            diffusion_helper, device, sampling_steps, args.eta
         )
+        
+        # Convert to text
+        embedding_matrix = model.token_embedding.weight.data.detach()
+        logits_for_ids = torch.matmul(generated_embeddings, embedding_matrix.t())
+        generated_ids = torch.argmax(logits_for_ids, dim=-1)
+        
+        full_text = tokenizer.decode(generated_ids[0], skip_special_tokens=True)
+        
+        logger.info(f"\n--- Generated Text ---")
+        print(full_text)
+        
     else:
-        if args.sampling_steps is not None:
-            logger.info(f"requested {args.sampling_steps} steps >= {config.diffusion_timesteps}, using full DDPM sampling")
-        else:
-            logger.info("using full DDPM sampling (all timesteps)")
-        generated_embeddings = p_sample_loop(model, output_shape, diffusion_helper, device, args)
-    
-    logger.info("converting generated embeddings to text...")
-    decoded_texts = generate_text_from_embeddings(generated_embeddings, model, tokenizer)
+        output_shape = (args.num_samples, config.block_size, config.n_embd)
 
-    for i, text in enumerate(decoded_texts):
-        logger.info(f"\n--- generated sample {i+1} ---")
-        print(text)
+        logger.info(f"starting unconditional generation of {args.num_samples} samples...")
+        logger.info(f"sequence length (block_size): {config.block_size}, embedding dim: {config.n_embd}")
+        logger.info(f"total diffusion timesteps in model config: {config.diffusion_timesteps}")
+        
+        if args.sampling_steps is not None and args.sampling_steps < config.diffusion_timesteps:
+            logger.info(f"using DDIM sampling with {args.sampling_steps} steps (eta={args.eta})")
+            generated_embeddings = ddim_sample_loop(
+                model, output_shape, diffusion_helper, device, 
+                num_steps=args.sampling_steps, eta=args.eta
+            )
+        else:
+            if args.sampling_steps is not None:
+                logger.info(f"requested {args.sampling_steps} steps >= {config.diffusion_timesteps}, using full DDPM sampling")
+            else:
+                logger.info("using full DDPM sampling (all timesteps)")
+            generated_embeddings = p_sample_loop(model, output_shape, diffusion_helper, device, args)
+        
+        logger.info("converting generated embeddings to text...")
+        decoded_texts = generate_text_from_embeddings(generated_embeddings, model, tokenizer)
+
+        for i, text in enumerate(decoded_texts):
+            logger.info(f"\n--- generated sample {i+1} ---")
+            print(text)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="generate text using a trained diffusion model.")
     parser.add_argument("checkpoint_path", type=str, help="path to the model checkpoint (.pt file).")
-    parser.add_argument("--num_samples", type=int, default=1, help="number of text samples to generate.")
-    parser.add_argument("--sampling_steps", type=int, default=None, help="number of DDIM sampling steps (default: use all timesteps with DDPM).")
+    
+    # Unconditional generation options
+    parser.add_argument("--num_samples", type=int, default=1, help="number of text samples to generate (unconditional mode).")
+    
+    # Conditional generation options  
+    parser.add_argument("--prompt", type=str, default=None, help="text prompt for conditional generation.")
+    parser.add_argument("--max_new_tokens", type=int, default=None, help="max new tokens to generate after prompt (default: block_size//2).")
+    
+    # Sampling options
+    parser.add_argument("--sampling_steps", type=int, default=None, help="number of DDIM sampling steps (default: 50 for prompt mode, all timesteps for unconditional).")
     parser.add_argument("--eta", type=float, default=0.0, help="DDIM eta parameter: 0.0=deterministic, 1.0=stochastic like DDPM.")
+    
+    # Other options
     parser.add_argument("--cpu", action="store_true", help="force use cpu.")
     parser.add_argument("--seed", type=int, default=None, help="random seed for sampling.")
     
