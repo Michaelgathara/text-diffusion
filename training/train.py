@@ -19,14 +19,7 @@ from datasets import load_dataset
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-try:
-    import bitsandbytes as bnb
-    HAS_BITSBYTES = True
-    print(f"Bits and Bytes Available")
-except ImportError:
-    HAS_BITSBYTES = False
-    print(f"Bits and Bytes Not Available")
-    
+   
 def clear_memory():
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -145,7 +138,9 @@ def evaluate_model(model, val_dataset_iterator, config, diffusion_helper, device
     return total_val_loss / actual_eval_iters
 
 def setup_optimizer(model, config, args):
-    if args.use_8bit_optimizer and HAS_BITSBYTES:
+    if args.use_8bit_optimizer:
+        # putting the import here so that the user has more control over this import
+        import bitsandbytes as bnb 
         try:
             optimizer = bnb.optim.AdamW8bit(
                 model.parameters(),
