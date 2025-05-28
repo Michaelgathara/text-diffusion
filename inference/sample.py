@@ -255,19 +255,67 @@ def ddim_sample_loop(model, shape, diffusion_helper, device, num_steps=50, eta=0
     
     return x_t
 
-def generate_text_from_embeddings(generated_embeddings, model, tokenizer):
+# def generate_text_from_embeddings(generated_embeddings, model, tokenizer):
+#     if not hasattr(model, 'token_embedding'):
+#         logger.error("model does not have 'token_embedding' attribute for converting embeddings to ids.")
+#         return ["error: token_embedding layer not found in model."] * generated_embeddings.shape[0]
+
+#     embedding_matrix = model.token_embedding.weight.data.detach()
+#     logits_for_ids = torch.matmul(generated_embeddings, embedding_matrix.t())
+#     generated_ids = torch.argmax(logits_for_ids, dim=-1)
+
+#     decoded_texts = []
+#     for i in range(generated_ids.shape[0]):
+#         text = tokenizer.decode(generated_ids[i], skip_special_tokens=True)
+#         decoded_texts.append(text)
+#     return decoded_texts
+
+def generate_text_from_embeddings(generated_embeddings, model, tokenizer, temperature=0.7, top_k=40, top_p=0.9):
     if not hasattr(model, 'token_embedding'):
-        logger.error("model does not have 'token_embedding' attribute for converting embeddings to ids.")
-        return ["error: token_embedding layer not found in model."] * generated_embeddings.shape[0]
+        logger.error("Model does not have 'token_embedding' attribute.")
+        return ["error: token_embedding layer not found."] * generated_embeddings.shape[0]
 
     embedding_matrix = model.token_embedding.weight.data.detach()
     logits_for_ids = torch.matmul(generated_embeddings, embedding_matrix.t())
-    generated_ids = torch.argmax(logits_for_ids, dim=-1)
-
+    
     decoded_texts = []
-    for i in range(generated_ids.shape[0]):
-        text = tokenizer.decode(generated_ids[i], skip_special_tokens=True)
+    for batch_idx in range(logits_for_ids.shape[0]):
+        batch_tokens = []
+        
+        for pos_idx in range(logits_for_ids.shape[1]):
+            logits = logits_for_ids[batch_idx, pos_idx]
+            
+            if temperature > 0:
+                logits = logits / temperature
+            
+            if top_k > 0:
+                top_k_logits, top_k_indices = torch.topk(logits, min(top_k, logits.size(-1)))
+                filtered_logits = torch.full_like(logits, float('-inf'))
+                filtered_logits[top_k_indices] = top_k_logits
+                logits = filtered_logits
+            
+            if top_p < 1.0:
+                sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+                cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+                
+                sorted_indices_to_remove = cumulative_probs > top_p
+                sorted_indices_to_remove[1:] = sorted_indices_to_remove[:-1].clone()
+                sorted_indices_to_remove[0] = 0
+                
+                indices_to_remove = sorted_indices[sorted_indices_to_remove]
+                logits[indices_to_remove] = float('-inf')
+            
+            if temperature == 0:
+                next_token = torch.argmax(logits).item()
+            else:
+                probs = F.softmax(logits, dim=-1)
+                next_token = torch.multinomial(probs, num_samples=1).item()
+            
+            batch_tokens.append(next_token)
+        
+        text = tokenizer.decode(batch_tokens, skip_special_tokens=True)
         decoded_texts.append(text)
+    
     return decoded_texts
 
 def main(args):
